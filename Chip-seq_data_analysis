@@ -1,0 +1,23 @@
+01 Clean raw fastq
+nohup trim_galore -q 20 --phred33 --length 50 -e 0.1 --stringency 4 --paired -o clean/ fq1 fq2 &
+
+02 bulid index
+bowtie2-build -f b73.fa b73
+
+03 Align clean_fastq to genome
+nohup bowtie2 -p 5 -X 800 --no-unal -I 0 -x /path/bowtie2_index/b73 -1 fq1.R1_val_1.fq.gz -2 fq2.R1_val_1.fq.gz -S align.sam &
+
+04 Convert sam file to bam (filter mpq5 and dup the bam file) 
+ls *sam |while read id ; do (nohup samtools view -bS -@ 5 -q 5 $id > ./$(basename $id ).mpq5.bam &) ; done
+ls *bam |while read id ; do (nohup samtools sort -@ 20 $id -o ./$(basename $id ).sort.bam &) ; done
+ls *sort.bam |while read id ; do (nohup samtools index $id &) ; done
+ls *sort.bam |while read id ; do (nohup sambamba markdup -r $id $(basename $id ).rmdup.bam &) ; done
+
+05 Deeptools visualization
+nohup ls  *.bam  |xargs -i samtools index {} &
+nohup bamCompare -bs 10 -p 10 -b1 ssrp1.bam -b2 input.bam -o log2-ssrp1.bw &
+nohup computeMatrix scale-regions -a 2000 -b 2000 -m 4000 -bs 200  -S *.bw -R sorted.bed -p 50 --missingDataAsZero --skipZeros -out out.gz &
+nohup plotProfile -m out.gz -out out.pdf --outFileNameData out.tab &
+
+06 MACS2 call peaks
+nohup macs2 callpeak -t ssrp1.bam -c input.bam -f BAM --broad -g 2.3e9 -B -q 0.01 -n peak --outdir ./peaks/ &
