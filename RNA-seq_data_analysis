@@ -1,0 +1,36 @@
+01 Clean raw fastq
+nohup trim_galore -q 20 --phred33 --length 25 -e 0.1 --stringency 4 --paired -o clean/ fq1 fq2 &
+
+02 bulid index
+hisat2-build b73.fa b73
+
+03 Align clean_fastq to genome
+nohup hisat2 -x /path/hisat2_index/b73 -p 5 -1 fq1.R1_val_1.fq.gz -2 fq2.R1_val_1.fq.gz -S ./rep1_hisat.sam 2>./rep1_hisat.log &
+
+04 Convert sam file to bam (filter mpq5 and dup the bam file) 
+ls *sam | while read id ; do (nohup grep -E "@|NH:i:1" $id | grep -v "ZS:i" > ./$(basename $id ).unique &) ; done
+ls *sam.unique |while read id ; do (nohup samtools view -bS -@ 5 -q 20 $id > ./$(basename $id ).mpq5.bam &) ; done
+ls *bam |while read id ; do (nohup samtools sort -@ 20 $id -o ./$(basename $id ).sort.bam &) ; done
+ls *sort.bam |while read id ; do (nohup samtools index $id &) ; done
+
+05 featureCounts
+nohup featureCounts -T 20 -p -t exon -g gene_id -a /path/Zea_mays.AGPv4.39.gtf -o gene_count *sort.bam > count.log 2>&1 &
+grep -v '#' gene_count | awk '{print$1"\t"$8"\t"$10"\t"$12"\t"$7"\t"$9"\t"$11}' > gene-count
+
+06 DEGs analysis
+library(DESeq2)
+counts <- read.csv("gene-count", check.names = F, sep = "\t", row.names = 1, header = T)
+counts[is.na(counts)] <- 0
+Count <- as.matrix(counts)
+Count_condition <- factor(c(rep("Sample1-", 3), rep("Sample2-", 3)))
+coldata <- data.frame(row.names=colnames(Count), Count_condition)
+dds <- DESeqDataSetFromMatrix(countData=Count, colData=coldata, design=~Count_condition)
+dds <- DESeq(dds)
+res <- results(dds)
+resOrdered <- res[order(res$padj), ]
+resdata <- merge(as.data.frame(resOrdered), as.data.frame(counts(dds, normalized=TRUE)), by="row.names", sort=FALSE)
+names(resdata)[1] <- "Gene"
+
+filter_padj0.05_DEGs
+resdata_filter <- subset(resdata,resdata$padj<0.05 & abs(resdata$log2FoldChange) >1)
+write.table(resdata_filter, file="DEGs-filter_output",sep="\t",row.names=F)
